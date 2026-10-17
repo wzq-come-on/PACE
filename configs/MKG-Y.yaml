@@ -1,0 +1,80 @@
+output_dir: &output_dir outputs/
+
+model_name: &model_name meta-llama/
+
+dataset:
+  base_dir: data/MKG-Y/
+
+tokenizer:
+  pretrained_model_name_or_path: *model_name
+  use_fast: no
+  add_eos_token: no
+
+llm_config:
+  pretrained_model_name_or_path: *model_name
+
+llm:
+  pretrained_model_name_or_path: *model_name
+  load_in_8bit: no
+
+loraconfig:
+  r: &r 8 # 8
+  lora_alpha: &lora_alpha 16 # 16
+  lora_dropout: &lora_dropout 0.1 # 0.05
+  target_modules:
+    - patch_embed.proj
+    - qkv
+    - attn.proj
+    - mlp.0
+    - mlp.2
+
+    - embed_tokens
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+
+    - gate_proj
+    - up_proj
+    - down_proj
+
+k_on:
+  criterion: bce
+  num_neg: 128 # 32
+  strict_negative: yes
+  num_k_on: 8
+  num_attn_head: 8 # 8
+  r: 32 # 32
+  lora_alpha:  64 # 64
+  lora_dropout: 0.3 # 0.3
+  adversarial_temperature: .5
+  window_size: 8
+  max_seq_len: 8
+
+trainer:
+  output_dir: *output_dir  # 指定训练过程中生成的输出文件（如模型检查点、日志等）的保存目录
+  num_train_epochs: 20  # 定义整个训练过程中数据集将被完整遍历的次数
+  save_total_limit: 2  # 限制训练过程中保存的检查点的最大数量，防止占用过多磁盘空间
+  per_device_train_batch_size: 2 # 8  # 每个计算设备（如 GPU）上进行训练时的样本批次大小，原注释值为 8
+  per_device_eval_batch_size: 16 # 16  # 每个计算设备（如 GPU）上进行评估时的样本批次大小，原注释值为 16
+  gradient_accumulation_steps: 4   # 1  # 梯度累积的步数，用于在内存不足时模拟更大的批次大小，原注释值为 1
+  eval_strategy: epoch # epoch  # 设定模型评估的触发策略，'epoch' 表示每个训练轮次结束后进行评估
+  eval_steps: 8  # 当 evaluation_strategy 为 'steps' 时，指定每隔多少训练步进行一次模型评估，当前策略为 'epoch' 此参数可能不生效
+  save_strategy: epoch
+  load_best_model_at_end: yes
+  metric_for_best_model: hits@1
+  greater_is_better: yes  # 定义模型检查点的保存策略，'no' 表示不保存检查点，原注释值为 'epoch'（每个训练轮次结束后保存）
+  warmup_steps: 88
+  bf16: yes  # 启用 BF16（Brain Floating Point 16）混合精度训练，可减少内存占用并加速训练
+  logging_steps: 10 # 指定每隔多少训练步记录一次训练日志，方便监控训练过程
+  logging_strategy: steps  # 设定日志记录的触发策略，'steps' 表示按步数记录日志
+  learning_rate: 5.7e-5  # 训练过程中使用的基础学习率，控制模型参数更新的步长
+  eval_accumulation_steps: 64  # 评估过程中梯度累积的步数，可用于减少评估时的内存占用
+  save_safetensors: no  # 控制是否使用 safetensors 格式保存模型权重
+  remove_unused_columns: no  # 决定是否移除数据集中未被模型使用的列
+  label_names:  # 列出数据集中用于表示标签的列名
+  - label
+  optim: adamw_torch  # 指定训练时使用的优化器
+  max_grad_norm: 1.0  # 设置梯度裁剪的最大范数，防止梯度爆炸
+  ddp_find_unused_parameters: yes  # 在使用分布式数据并行（DDP）训练时，是否查找未被模型使用的参数
+  report_to: []

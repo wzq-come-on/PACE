@@ -1,2 +1,10 @@
+# Core method: training and evaluation of the PACE controller.
 numpy>=1.24
 torch>=2.0
+
+# Expert score exporters only (experts/kon, experts/lbmkgc).
+# Not needed to run train.py on already-exported scores.
+pyyaml>=6.0
+easydict>=1.9
+transformers>=4.40
+peft>=0.10

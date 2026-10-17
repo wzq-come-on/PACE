@@ -6,17 +6,41 @@ it does not update either expert.
 
 ## Included
 
-- `pace.py`: query-wise alignment, five-feature prediction profiling,
-  5-16-1 controller (113 parameters), bounded fusion, and negative selection.
+- `pace.py`: query-wise alignment, prediction profiling, the 16-unit bounded
+  controller, bounded fusion, and negative selection.
 - `selection.py`: training-query anchor selection and ranking metrics.
 - `data.py`: portable input validation and loading.
 - `train.py`: controller fitting and filtered head/tail evaluation.
+- `experts/`: adapters that export frozen expert scores into the score layout
+  (K-ON semantic, LBMKGC structural) and the contract builder.
+- `configs/`: expert settings used in the paper, one file per benchmark.
+- `scripts/`: end-to-end launchers for the main experiment.
+- `docs/RESULTS.md`: which command reproduces which paper artifact.
 - `examples/make_toy_data.py`: a synthetic input example.
 
 The controller, alignment, feature construction, fusion and rank operations
-retain the original numerical implementation. Experiment scheduling,
-machine monitoring, historical sweeps and reporting scripts are omitted.
-The command-line and input paths have been made portable.
+retain the original numerical implementation. Machine monitoring, historical
+sweeps and reporting scratch scripts are omitted. The command line and input
+paths have been made portable.
+
+The release covers the main comparison. Ablations, sensitivity sweeps and the
+inference-overhead benchmark are not part of this archive.
+
+## Repository layout
+
+```text
+pace.py  selection.py  data.py  train.py     core method and score interface
+experts/build_contract.py                    query contracts from a graph
+experts/kon/export_kon_scores.py             semantic expert scores
+experts/lbmkgc/export_lbmkgc_scores.py       structural expert scores
+scripts/00..03_*.sh                          one launcher per stage
+configs/{DB15K,MKG-W,MKG-Y}.yaml             expert settings
+docs/RESULTS.md                              reproduction map
+```
+
+The pipeline is `contracts → expert scores → controller`. See
+`docs/RESULTS.md` for the exact command per stage and `experts/README.md` for
+the expert-side requirements.
 
 ## Environment
 
@@ -27,6 +51,10 @@ runtime (or CPU), then install the dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+`numpy` and `torch` are all the controller needs. The remaining entries
+(`pyyaml`, `easydict`, `transformers`, `peft`) are used only by the two expert
+score exporters; skip them if you already have exported scores.
 
 ## Input scores
 
@@ -78,17 +106,28 @@ convex fusion requires `0 <= alpha0-radius` and `alpha0+radius <= 1`.
 Features preserve the original code order:
 `[semantic margin, structural margin, absolute margin difference,
 top-1 agreement, absolute top-1 score difference]`.
-Dispersion features are not controller inputs. Feature means and standard
-deviations are fitted on training queries and reused at evaluation.
-The structural weight is `alpha0 + radius * tanh(MLP(features))`.
+Dispersion features are not controller inputs in this five-statistic variant.
+Feature means and standard deviations are fitted on training queries and reused
+at evaluation. The structural weight is `alpha0 + radius * tanh(MLP(features))`.
+
+`--features 7` switches the profile to the seven-statistic vector written in the
+manuscript, `[m_K, m_L, d_K, d_L, |m_K-m_L|, a, |t_K-t_L|]`, where `d_K` and
+`d_L` are zero-filled sample deviations of the aligned score vectors. The
+controller then has 7 inputs and 145 parameters instead of 5 and 113.
 
 The shared other-answer filter is applied before score alignment and
 feature construction, preserving the original experiment protocol.
-The training negative is the highest-scoring legal non-target entity
-under fixed anchor fusion, with the lowest entity ID breaking score ties.
-The anchor and negatives remain fixed during a controller fit. Historical
-structural-negative selection remains explicitly labelled in the helper
-code and is not used by the training entry point.
+
+Two training-negative rules are available:
+
+- `--negative-rule structural_historical` (default): the structural expert's
+  top-1 candidate, falling back to its runner-up when both experts agree on
+  top-1. This reproduces the reported tables.
+- `--negative-rule anchor_hard`: the highest-scoring legal non-target entity
+  under fixed anchor fusion, with the lowest entity ID breaking score ties.
+
+Both rules exclude the target and keep the negative fixed during a fit, so the
+two recipes differ only in which legal non-target supplies the margin.
 
 Defaults: Adam, 80 epochs, learning rate 0.001, weight decay 0.0001,
 batch size 4096, ranking-loss temperature 0.2, and anchor penalty 0.05.
@@ -118,8 +157,15 @@ use `train.py`'s evaluation path with the appropriate query contracts.
 
 ## Release scope
 
-This archive contains the core PACE method and a portable score-based
-training interface. It contains no benchmark outputs, logs, checkpoints,
-expert weights, datasets, cluster configuration or repository history.
-Full expert training/export pipelines and paper-specific experiment suites
-are outside this compact release.
+This archive contains the PACE method, the score-based training interface and
+the expert score exporters for the two experts used in the paper. It contains
+no benchmark outputs, logs, checkpoints, expert weights, datasets, cluster
+configuration or repository history.
+
+Ablation, sensitivity and inference-overhead studies are not included. The
+released scope is the main comparison: the learned controller against fixed
+fusion under a shared frozen score cache.
+
+Expert training and checkpoint selection are outside this release: the two
+exporters consume frozen checkpoints and only write candidate score matrices.
+See `experts/README.md`.

@@ -1,4 +1,4 @@
-"""Train/evaluate the five-feature PACE controller on frozen expert scores."""
+"""Train/evaluate the PACE controller on frozen expert scores."""
 from __future__ import annotations
 import argparse
 import json
@@ -7,7 +7,8 @@ import numpy as np
 import torch
 from torch import nn
 from data import load_part
-from pace import Gate, FEATURE_NAMES, align_block, filter_block, profile, fused_scores, ranks, negatives
+from pace import (Gate, FEATURE_NAMES_BY_COUNT, align_block, filter_block,
+                  profile, fused_scores, ranks, negatives)
 from selection import ALPHAS, choose_alpha, metric_dict
 
 
@@ -34,7 +35,7 @@ def blocks(args, split):
 def prepare_training(args):
     features, cubes = [], []
     for k, l, target in blocks(args, "train"):
-        features.append(profile(k, l).cpu().numpy())
+        features.append(profile(k, l, args.features).cpu().numpy())
         cubes.append(np.stack([ranks(fused_scores(k, l, float(a)), target).cpu().numpy()
                                for a in ALPHAS]))
     raw, cube = np.concatenate(features), np.concatenate(cubes, axis=1)
@@ -47,9 +48,13 @@ def prepare_training(args):
         raise ValueError("Anchor must be in [0, 1] and radius must be nonnegative")
     # Do not silently clip user-specified sensitivity settings.
     # The original bounded parameterization is preserved even outside [0,1].
+    # The released main table uses the structural-led negative rule: the
+    # structural expert's top candidate, falling back to its runner-up when both
+    # experts agree on top-1.  ``anchor_hard`` is the alternative rule that picks
+    # the strongest legal non-target under the fixed anchor fusion.
     gaps = []
     for k, l, target in blocks(args, "train"):
-        _, gap = negatives(k, l, target, anchor, "anchor_hard")
+        _, gap = negatives(k, l, target, anchor, args.negative_rule)
         gaps.append(gap.cpu().numpy())
     mean, std = raw.mean(0), raw.std(0)
     std[std < 1e-6] = 1.0
@@ -60,7 +65,7 @@ def prepare_training(args):
 def evaluate(args, model, mean, std, anchor, radius):
     all_ranks, all_alpha = [], []
     for k, l, target in blocks(args, "test"):
-        raw = profile(k, l).cpu().numpy()
+        raw = profile(k, l, args.features).cpu().numpy()
         x = torch.from_numpy((raw - mean) / std).to(args.device)
         alpha = model(x, anchor, radius, True)
         all_ranks.append(ranks(fused_scores(k, l, alpha[:, None]), target).cpu().numpy())
@@ -74,8 +79,7 @@ def run(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     x, d, mean, std, anchor, radius, selected = prepare_training(args)
-    model = Gate(5, "bounded-mlp").to(args.device)
-    assert sum(p.numel() for p in model.parameters()) == 113
+    model = Gate(args.features, "bounded-mlp").to(args.device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     xx, dd = torch.from_numpy(x), torch.from_numpy(d)
     generator = torch.Generator().manual_seed(args.seed)
@@ -97,9 +101,12 @@ def run(args):
     rank, alpha = evaluate(args, model, mean, std, anchor, radius)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    config = {"dataset": args.dataset, "seed": args.seed, "features": FEATURE_NAMES,
-              "controller": [5, 16, 1], "parameters": 113, "anchor_alpha": anchor,
-              "gate_radius": radius, "negative_rule": "anchor_hard",
+    config = {"dataset": args.dataset, "seed": args.seed,
+              "features": list(FEATURE_NAMES_BY_COUNT[args.features]),
+              "controller": [args.features, 16, 1],
+              "parameters": sum(p.numel() for p in model.parameters()),
+              "anchor_alpha": anchor,
+              "gate_radius": radius, "negative_rule": args.negative_rule,
               "epochs": args.epochs, "batch_size": args.batch_size,
               "lr": args.lr, "weight_decay": args.weight_decay,
               "anchor_penalty": args.anchor_penalty, "loss_temperature": args.loss_temperature,
@@ -120,6 +127,12 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--dataset", required=True)
+    p.add_argument("--features", type=int, choices=(5, 7), default=5,
+                   help="5 keeps the dispersion-free profile, 7 is the manuscript phi(q)")
+    p.add_argument("--negative-rule", choices=("structural_historical", "anchor_hard"),
+                   default="structural_historical",
+                   help="structural_historical reproduces the paper's tables; "
+                        "anchor_hard selects the hardest legal non-target under the anchor fusion")
     p.add_argument("--output-dir", type=Path, default=Path("outputs/pace"))
     p.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=20260904)

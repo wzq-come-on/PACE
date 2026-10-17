@@ -1,0 +1,73 @@
+output_dir: &output_dir outputs/
+
+model_name: &model_name meta-llama/
+
+
+dataset:
+  base_dir: data/MKG-W/
+
+tokenizer:
+  pretrained_model_name_or_path: *model_name
+  use_fast: no
+  add_eos_token: no
+
+llm_config:
+  pretrained_model_name_or_path: *model_name
+
+llm:
+  pretrained_model_name_or_path: *model_name
+  load_in_8bit: no
+
+loraconfig:
+  r: &r 8
+  lora_alpha: &lora_alpha 16
+  lora_dropout: &lora_dropout 0.05
+  target_modules: 
+  - embed_tokens
+  # - lm_head
+  - q_proj
+  - v_proj
+
+k_on:
+  criterion: bce
+  num_neg: 32
+  strict_negative: yes
+  num_k_on: 8
+  num_attn_head: 8
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.3
+  adversarial_temperature: .5
+
+
+trainer:
+  output_dir: *output_dir
+  num_train_epochs: 20
+  save_total_limit: 2
+  # Original 7-GPU run used 8 x 7 x 1 = 56 effective samples per update.
+  # This 4-GPU launch keeps that effective batch size at 7 x 4 x 2 = 56.
+  per_device_train_batch_size: 7
+  per_device_eval_batch_size: 16
+  eval_strategy: epoch
+  eval_steps: 500
+  save_strategy: epoch
+  load_best_model_at_end: yes
+  metric_for_best_model: hits@1
+  greater_is_better: yes
+  warmup_steps: 50
+  bf16: yes
+  logging_steps: 10
+  logging_strategy: steps
+  learning_rate: 1.0e-4
+  gradient_accumulation_steps: 2
+  eval_accumulation_steps: 64
+  save_safetensors: no
+  remove_unused_columns: no
+  label_names:
+  - label
+  # ``adamw_hf`` was removed in the installed Transformers release.
+  optim: adamw_torch
+  max_grad_norm: 1.
+  ddp_find_unused_parameters: yes
+  # TensorBoard is not installed in the shared KQ environment.
+  report_to: []
